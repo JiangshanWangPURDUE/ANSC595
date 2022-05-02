@@ -1,0 +1,160 @@
+module load bioinfo
+module load Qiime/2-2021.11
+
+echo "Start time"
+date +"%d %B %Y %H:%M:%S"
+
+echo "Data Import"
+qiime tools import \
+  --type 'SampleData[PairedEndSequencesWithQuality]' \
+  --input-path ../all_data/SampleSeq_manifest.xls.txt \
+  --output-path demux.qza \
+  --input-format PairedEndFastqManifestPhred33V2
+
+echo "Demultiplex"
+qiime demux summarize \
+  --i-data demux.qza \
+  --o-visualization demux.qzv
+
+echo "dada2"
+qiime dada2 denoise-paired \
+  --i-demultiplexed-seqs demux.qza \
+  --p-trim-left-f 23 \
+  --p-trim-left-r 26 \
+  --p-trunc-len-f 250 \
+  --p-trunc-len-r 250 \
+  --p-n-threads 0 \
+  --o-representative-sequences default-rep-seqs.qza \
+  --o-table default-table.qza \
+  --o-denoising-stats default-stats.qza
+
+qiime metadata tabulate \
+  --m-input-file default-stats.qza \
+  --o-visualization default-stats.qzv
+
+qiime feature-table summarize \
+  --i-table default-table.qza \
+  --o-visualization default-table.qzv \
+  --m-sample-metadata-file ../all_data/SampleSeq_metadata.xls.txt
+
+qiime feature-table tabulate-seqs \
+  --i-data default-rep-seqs.qza \
+  --o-visualization default-rep-seqs.qzv
+
+qiime feature-table filter-features \
+  --i-table default-table.qza \
+  --p-min-frequency 10 \
+  --o-filtered-table feature-frequency-less-than-10-filtered-table.qza
+
+qiime feature-table summarize \
+  --i-table feature-frequency-less-than-10-filtered-table.qza \
+  --o-visualization feature-frequency-less-than-10-filtered-table.qzv \
+  --m-sample-metadata-file ../all_data/SampleSeq_metadata.xls.txt
+
+
+echo "Generate a tree for phylogenetic diversity analyses"
+qiime phylogeny align-to-tree-mafft-fasttree \
+  --i-sequences default-rep-seqs.qza \
+  --p-n-threads 32 \
+  --o-alignment aligned-rep-seqs.qza \
+  --o-masked-alignment masked-aligned-rep-seqs.qza \
+  --o-tree unrooted-tree.qza \
+  --o-rooted-tree rooted-tree.qza
+
+echo "Alpha and beta diversity analysis"
+qiime diversity core-metrics-phylogenetic \
+  --i-phylogeny rooted-tree.qza \
+  --i-table feature-frequency-less-than-10-filtered-table.qza \
+  --p-n-jobs-or-threads 32 \
+  --p-sampling-depth 25116 \
+  --m-metadata-file ../all_data/SampleSeq_metadata.xls.txt \
+  --output-dir core-metrics-results
+
+qiime diversity alpha-correlation \
+  --i-alpha-diversity core-metrics-results/faith_pd_vector.qza \
+  --m-metadata-file ../all_data/SampleSeq_metadata.xls.txt \
+  --o-visualization core-metrics-results/faith-pd-group-correlation.qzv
+
+qiime diversity alpha-correlation \
+  --i-alpha-diversity core-metrics-results/shannon_vector.qza \
+  --m-metadata-file ../all_data/SampleSeq_metadata.xls.txt \
+  --o-visualization core-metrics-results/shannon_vector-correlation.qzv
+
+qiime emperor plot \
+  --i-pcoa core-metrics-results/unweighted_unifrac_pcoa_results.qza \
+  --m-metadata-file ../all_data/SampleSeq_metadata.xls.txt \
+  --o-visualization core-metrics-results/unweighted-unifrac-emperor.qzv
+
+echo "Alpha-group-significance"
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/faith_pd_vector.qza \
+  --m-metadata-file ../all_data/SampleSeq_metadata.xls.txt \
+  --o-visualization core-metrics-results/faith-pd-group-significance.qzv
+
+qiime diversity alpha-group-significance \
+  --i-alpha-diversity core-metrics-results/evenness_vector.qza \
+  --m-metadata-file ../all_data/SampleSeq_metadata.xls.txt \
+  --o-visualization core-metrics-results/evenness-group-significance.qzv
+
+echo "Beta-group-significance"
+qiime diversity beta-group-significance \
+  --i-distance-matrix core-metrics-results/unweighted_unifrac_distance_matrix.qza \
+  --m-metadata-file ../all_data/SampleSeq_metadata.xls.txt \
+  --m-metadata-column site \
+  --o-visualization core-metrics-results/unweighted-unifrac-site-significance.qzv \
+  --p-pairwise
+
+qiime feature-classifier classify-sklearn \
+  --i-classifier silva-classifier-v3v4.qza \
+  --i-reads default-rep-seqs.qza \
+  --p-n-jobs 12 \
+  --o-classification taxonomy.qza
+
+qiime metadata tabulate \
+  --m-input-file taxonomy.qza \
+  --o-visualization taxonomy.qzv
+
+qiime taxa barplot \
+  --i-table feature-frequency-less-than-10-filtered-table.qza \
+  --i-taxonomy taxonomy.qza \
+  --m-metadata-file ../all_data/SampleSeq_metadata.xls.txt \
+  --o-visualization taxa-bar-plots.qzv
+
+qiime diversity alpha-rarefaction \
+  --i-table feature-frequency-less-than-10-filtered-table.qza \
+  --i-phylogeny rooted-tree.qza \
+  --p-max-depth 30000 \
+  --m-metadata-file SampleSeq_metadata2.xls.txt \
+  --o-visualization alpha-rarefaction_30000.qzv
+qiime feature-table filter-samples \
+  --i-table default-table.qza \
+  --m-metadata-file SampleSeq_metadata2.xls.txt \
+  --p-where "[site]='Jejunum'" \
+  --o-filtered-table ancom/Jejunum-table.qza
+
+qiime composition add-pseudocount \
+  --i-table ancom/Jejunum-table.qza \
+  --o-composition-table ancom/comp-Jejunum-table.qza
+
+qiime composition ancom \
+  --i-table ancom/comp-Jejunum-table.qza \
+  --m-metadata-file SampleSeq_metadata2.xls.txt \
+  --m-metadata-column animal_id \
+  --o-visualization ancom/ancom-Jejunum-animal-id.qzv
+
+qiime taxa collapse \
+  --i-table ancom/Jejunum-table.qza \
+  --i-taxonomy taxonomy.qza \
+  --p-level 6 \
+  --o-collapsed-table ancom/Jejunum-table-l6.qza
+
+qiime composition add-pseudocount \
+  --i-table ancom/Jejunum-table-l6.qza \
+  --o-composition-table ancom/comp-Jejunum-table-l6.qza
+
+qiime composition ancom \
+  --i-table ancom/comp-Jejunum-table-l6.qza \
+  --m-metadata-file SampleSeq_metadata2.xls.txt \
+  --m-metadata-column animal_id \
+  --o-visualization ancom/l6-ancom-Jejunum-animal-id.qzv
+
